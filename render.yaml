@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ipg-cea-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
