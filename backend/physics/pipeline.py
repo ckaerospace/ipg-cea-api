@@ -9,7 +9,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from .cea_rocket import run_rocket
-from .constants import IPG6S, NozzleGeometry
+from .constants import E_CHARGE, IPG6S, K_B, M_O, M_U, NozzleGeometry
 from .derived import probe_quantities, probe_to_dict
 from .plume import CollisionlessPlume, marching_squares
 from .sudden_freeze import KN_CRIT, kn_gll_exit, mix_d_hs, sudden_freeze_field
@@ -114,6 +114,20 @@ def solve_operating_point(
     field["h_tot_MJ_kg"] = h_tot / 1e6
     field["h_tot_ratio"] = h_tot_ratio
 
+    # Local Mach and directed particle kinetic energy (eV).
+    T_loc = np.maximum(t_ratio * float(ex["T0"]), 1.0)
+    gamma = float(ex.get("gamma") or 1.4)
+    Rsp = float(ex.get("R") or plume.R)
+    a_loc = np.sqrt(np.maximum(gamma * Rsp * T_loc, 1.0))
+    mach = speed / a_loc
+    mw_u = float(ex.get("MW") or 16.0)
+    m_avg = mw_u * M_U
+    e_kin_eV = 0.5 * m_avg * speed * speed / E_CHARGE
+    e_O_eV = 0.5 * M_O * speed * speed / E_CHARGE
+    field["mach"] = mach
+    field["e_kin_eV"] = e_kin_eV
+    field["e_O_eV"] = e_O_eV
+
     contours: dict[str, Any] = {}
     if include_contours:
         speed_ratio = field["speed"] / ex["U0"] if ex["U0"] > 0 else field["speed"]
@@ -122,6 +136,7 @@ def solve_operating_point(
             "speed": marching_squares(x, y, speed_ratio, SPEED_LEVELS),
             "T": marching_squares(x, y, field["t_ratio"], TEMP_LEVELS),
             "h_tot": marching_squares(x, y, h_tot_ratio, HTOT_LEVELS),
+            "mach": marching_squares(x, y, mach, [1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0]),
         }
 
     def _f32(a: np.ndarray) -> list[float]:
@@ -155,6 +170,9 @@ def solve_operating_point(
             "v": _f32(field["v"]),
             "t_ratio": _f32(field["t_ratio"]),
             "speed": _f32(field["speed"]),
+            "mach": _f32(field["mach"]),
+            "e_kin_eV": _f32(field["e_kin_eV"]),
+            "e_O_eV": _f32(field["e_O_eV"]),
             "h_tot_MJ_kg": _f32(field["h_tot_MJ_kg"]),
             "h_tot_ratio": _f32(field["h_tot_ratio"]),
             "contours": contours,
@@ -197,7 +215,11 @@ def interpolate_field(payload: dict[str, Any], xq: float, yq: float) -> dict[str
             + tx * ty * a[iy + 1, ix + 1]
         )
 
-    return {"n_ratio": bl(n), "u": bl(u), "v": bl(v), "t_ratio": bl(t)}
+    out = {"n_ratio": bl(n), "u": bl(u), "v": bl(v), "t_ratio": bl(t)}
+    for extra in ("speed", "mach", "e_kin_eV", "e_O_eV", "h_tot_MJ_kg", "h_tot_ratio"):
+        if extra in p:
+            out[extra] = bl(reshape(extra))
+    return out
 
 
 def probe_at(payload: dict[str, Any], xq: float, yq: float) -> dict[str, Any]:
@@ -222,6 +244,25 @@ def probe_at(payload: dict[str, Any], xq: float, yq: float) -> dict[str, Any]:
     d["n_ratio"] = samp["n_ratio"]
     d["t_ratio"] = samp["t_ratio"]
     d["speed_ratio"] = (d["speed"] / ex["U0"]) if ex["U0"] else 0.0
+    T = float(d["T"])
+    speed = float(d["speed"])
+    gamma = float(ex.get("gamma") or 1.4)
+    Rsp = float(ex.get("R") or 0.0)
+    d["mach"] = samp.get("mach")
+    if d["mach"] is None and T > 0 and Rsp > 0:
+        d["mach"] = speed / float(np.sqrt(gamma * Rsp * T))
+    mw_u = float(ex.get("MW") or 16.0)
+    d["e_kin_eV"] = samp.get("e_kin_eV")
+    if d["e_kin_eV"] is None:
+        d["e_kin_eV"] = 0.5 * mw_u * M_U * speed * speed / E_CHARGE
+    d["e_O_eV"] = samp.get("e_O_eV")
+    if d["e_O_eV"] is None:
+        d["e_O_eV"] = d.get("ao_energy_eV")
+        if d["e_O_eV"] is None:
+            d["e_O_eV"] = 0.5 * M_O * speed * speed / E_CHARGE
+    d["e_th_eV"] = 1.5 * K_B * max(T, 0.0) / E_CHARGE
+    if "h_tot_MJ_kg" in samp:
+        d["h_tot_MJ_kg"] = samp["h_tot_MJ_kg"]
     return d
 
 
