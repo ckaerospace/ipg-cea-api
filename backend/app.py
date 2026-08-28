@@ -10,7 +10,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.responses import Response
 
-from physics.cea_rocket import CEA_VERSION, co2_enthalpy_20C, hinj_for_target_mdot, hp_equilibrium_o2
+from physics.cea_rocket import (
+    CEA_VERSION,
+    characteristics_sweep,
+    co2_enthalpy_20C,
+    hinj_for_target_mdot,
+    hp_equilibrium_o2,
+)
 from physics.constants import (
     ADVANCED_SPECIES,
     COMMON_GASES,
@@ -31,7 +37,7 @@ DIST = ROOT / "frontend" / "dist"
 app = FastAPI(
     title="IRS collisionless plume",
     description="NASA CEA rocket stations + Khasawneh–Cai 2-D free-molecular jet.",
-    version="1.3.0",
+    version="1.4.0",
 )
 # API key first (inner), CORS last so it wraps 401s for grok.me / localhost.
 app.add_middleware(ApiKeyMiddleware)
@@ -62,7 +68,7 @@ class SolveRequest(BaseModel):
     ymax_m: float = Field(1.0, gt=0.2, lt=2.0)
     nx: int = Field(65, ge=GRID_MIN, le=GRID_MAX)
     ny: int = Field(65, ge=GRID_MIN, le=GRID_MAX)
-    mode: str = Field("enthalpy", description="enthalpy | generator")
+    mode: str = Field("enthalpy", description="enthalpy | generator | power | point")
     plume_mode: str = Field("auto", description="auto | collisionless | sudden_freeze")
     # legacy
     gas: Optional[str] = None
@@ -82,6 +88,27 @@ class MixPreview(BaseModel):
     basis: str = "mole"
 
 
+class CharacteristicsRequest(BaseModel):
+    pinj_ref_Pa: float = Field(100.0, gt=1.0, lt=2e5)
+    mixture: dict[str, float] | None = None
+    basis: str = "mole"
+    gas: Optional[str] = None
+    he_mole_frac: float = Field(0.0, ge=0.0, le=0.99)
+    d_c_mm: float = Field(37.0, gt=1.0, lt=500.0)
+    d_t_mm: float = Field(20.0, gt=1.0, lt=500.0)
+    d_e_mm: float = Field(40.0, gt=1.0, lt=500.0)
+    nozzle_name: str = "IPG6-S"
+    a_c_mm2: Optional[float] = None
+    a_t_mm2: Optional[float] = None
+    a_e_mm2: Optional[float] = None
+    hinj_min: Optional[float] = Field(None, gt=-20.0, lt=80.0)
+    hinj_max: float = Field(40.0, gt=-15.0, lt=80.0)
+    n_h: int = Field(29, ge=3, le=80)
+    mdot_mg_s_lines: Optional[list[float]] = None
+    power_W_lines: Optional[list[float]] = None
+    ions: bool = True
+
+
 def _presets_resolved() -> list[dict[str, Any]]:
     h_co2 = co2_enthalpy_20C() / 1e6
     out = []
@@ -94,6 +121,13 @@ def _presets_resolved() -> list[dict[str, Any]]:
         item["geometry"] = fac["geometry"]
         out.append(item)
     return out
+
+
+def _geometry_from_body(body) -> NozzleGeometry:
+    name = getattr(body, "nozzle_name", None) or "custom"
+    if getattr(body, "a_c_mm2", None) and body.a_t_mm2 and body.a_e_mm2:
+        return NozzleGeometry.from_areas_mm2(name, body.a_c_mm2, body.a_t_mm2, body.a_e_mm2)
+    return NozzleGeometry.from_mm(name, body.d_c_mm, body.d_t_mm, body.d_e_mm)
 
 
 @app.options("/api/{rest:path}")
@@ -159,8 +193,10 @@ def species_check(name: str) -> dict[str, Any]:
 @app.post("/api/solve")
 def solve(req: SolveRequest) -> dict[str, Any]:
     mode = (req.mode or "enthalpy").strip().lower()
+    if mode == "point":
+        mode = "enthalpy"
     if mode not in ("enthalpy", "generator", "power"):
-        raise HTTPException(status_code=400, detail="mode must be enthalpy, generator, or power")
+        raise HTTPException(status_code=400, detail="mode must be enthalpy, generator, power, or point")
 
     hinj = req.hinj_MJ_kg
     # Generator setup: operators set ṁ (MFC) and measure pinj; invert CEA for hinj.
@@ -236,6 +272,41 @@ def solve(req: SolveRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"CEA/plume solve failed: {exc}") from exc
+
+
+
+@app.post("/api/characteristics")
+def characteristics(req: CharacteristicsRequest) -> dict[str, Any]:
+    """1-D hinj sweep at pinj_ref → mdot/power isolines and composition kinks."""
+    n_h = max(5, min(41, int(req.n_h)))
+    mixture = req.mixture
+    gas = req.gas
+    if not mixture and gas:
+        mixture = None
+    else:
+        mixture = mixture or {"O2": 1.0}
+        gas = None
+    try:
+        geom = _geometry_from_body(req)
+        payload = characteristics_sweep(
+            pinj_ref_Pa=float(req.pinj_ref_Pa),
+            mixture=mixture,
+            basis=req.basis,
+            gas=gas,
+            he_mole_frac=float(req.he_mole_frac),
+            geometry=geom,
+            hinj_min=req.hinj_min,
+            hinj_max=float(req.hinj_max),
+            n_h=n_h,
+            mdot_mg_s_lines=req.mdot_mg_s_lines,
+            power_W_lines=req.power_W_lines,
+            ions=bool(req.ions),
+        )
+        return payload
+    except (UnknownSpecies, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"CEA characteristics sweep failed: {exc}") from exc
 
 
 @app.get("/api/kinks")
