@@ -321,3 +321,76 @@ def hp_equilibrium_o2(pinj_Pa: float, hinj_MJ_kg: float, ions: bool = True) -> d
         "x_O+": mf.get("O+", 0.0),
         "x_e": mf.get("e-", 0.0),
     }
+
+
+def hinj_for_target_mdot(
+    pinj_Pa: float,
+    mdot_mg_s: float,
+    geometry: NozzleGeometry,
+    mixture: Mapping[str, float] | None = None,
+    basis: str = "mole",
+    gas: str | None = None,
+    he_mole_frac: float = 0.0,
+    ions: bool = True,
+    h_lo: float | None = None,
+    h_hi: float = 75.0,
+) -> tuple[float, CEAResult]:
+    """Invert CEA rocket: operators set mass flow and measure pinj; hinj is solved.
+
+    At fixed pinj and throat area, mdot falls as assigned enthalpy rises
+    (hotter, lower density). Matches IPG operation with mass-flow controllers.
+    """
+    from scipy.optimize import brentq
+
+    target = float(mdot_mg_s) * 1e-6
+    if target <= 0:
+        raise ValueError("mdot_mg_s must be positive")
+
+    spec = parse_mixture(mixture, basis=basis, gas=gas, he_mole_frac=he_mole_frac)
+    lo = spec.h_ref_MJ_kg + 0.3 if h_lo is None else float(h_lo)
+    hi = float(h_hi)
+    if hi <= lo + 0.5:
+        hi = lo + 20.0
+
+    cache: dict[float, CEAResult] = {}
+
+    def run_h(h: float) -> CEAResult:
+        key = round(float(h), 4)
+        if key not in cache:
+            cache[key] = run_rocket(
+                pinj_Pa=pinj_Pa,
+                hinj_MJ_kg=key,
+                gas=gas,
+                he_mole_frac=he_mole_frac,
+                mixture=mixture,
+                basis=basis,
+                geometry=geometry,
+                ions=ions,
+            )
+        return cache[key]
+
+    def f(h: float) -> float:
+        return run_h(h).mdot_kg_s - target
+
+    # Expand the bracket if the target sits outside.
+    m_lo = f(lo)
+    m_hi = f(hi)
+    tries = 0
+    while m_lo * m_hi > 0 and tries < 8:
+        if m_lo > 0 and m_hi > 0:
+            # both too much flow → need hotter (lower mdot) → raise hi
+            hi = min(80.0, hi + 10.0)
+            m_hi = f(hi)
+        else:
+            # both too little flow → cooler
+            lo = max(spec.h_ref_MJ_kg - 5.0, lo - 8.0)
+            m_lo = f(lo)
+        tries += 1
+    if m_lo * m_hi > 0:
+        raise ValueError(
+            f"No CEA enthalpy matches mdot={mdot_mg_s:g} mg/s at pinj={pinj_Pa:g} Pa "
+            f"(bracket mdot { (m_lo+target)*1e6:.3g} … {(m_hi+target)*1e6:.3g} mg/s)."
+        )
+    h_star = float(brentq(f, lo, hi, xtol=2e-4, maxiter=40))
+    res = run_h(h_star)
+    return h_star, res

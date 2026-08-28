@@ -16,6 +16,7 @@ from .plume import CollisionlessPlume, marching_squares
 DENSITY_LEVELS = [0.8, 0.5, 0.3, 0.2, 0.1, 0.05, 0.01]
 SPEED_LEVELS = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.3, 1.35]
 TEMP_LEVELS = [0.5, 0.525, 0.55, 0.575, 0.6, 0.7, 0.8]
+HTOT_LEVELS = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.05]
 
 
 def solve_operating_point(
@@ -55,6 +56,20 @@ def solve_operating_point(
     x = np.linspace(0.0, xmax_m, nx)
     y = np.linspace(-ymax_m, ymax_m, ny)
     field = plume.grid(x, y)
+
+    # Frozen total enthalpy on the collisionless grid:
+    # static h ≈ href + (h_exit − href) * T/T0, then add ½V².
+    href_J = float(cea_res.mixture.get("h_ref_MJ_kg", 0.0)) * 1e6
+    h_exit_J = float(ex.get("h_kJ_kg") or 0.0) * 1e3
+    hinj_J = float(cea_res.hinj_MJ_kg) * 1e6
+    t_ratio = np.asarray(field["t_ratio"], dtype=np.float64)
+    speed = np.asarray(field["speed"], dtype=np.float64)
+    h_static = href_J + (h_exit_J - href_J) * t_ratio
+    h_tot = h_static + 0.5 * speed * speed
+    h_tot_ratio = h_tot / hinj_J if abs(hinj_J) > 1.0 else np.zeros_like(h_tot)
+    field["h_tot_MJ_kg"] = h_tot / 1e6
+    field["h_tot_ratio"] = h_tot_ratio
+
     contours: dict[str, Any] = {}
     if include_contours:
         speed_ratio = field["speed"] / ex["U0"] if ex["U0"] > 0 else field["speed"]
@@ -62,6 +77,7 @@ def solve_operating_point(
             "n": marching_squares(x, y, field["n_ratio"], DENSITY_LEVELS),
             "speed": marching_squares(x, y, speed_ratio, SPEED_LEVELS),
             "T": marching_squares(x, y, field["t_ratio"], TEMP_LEVELS),
+            "h_tot": marching_squares(x, y, h_tot_ratio, HTOT_LEVELS),
         }
 
     def _f32(a: np.ndarray) -> list[float]:
@@ -88,6 +104,8 @@ def solve_operating_point(
             "v": _f32(field["v"]),
             "t_ratio": _f32(field["t_ratio"]),
             "speed": _f32(field["speed"]),
+            "h_tot_MJ_kg": _f32(field["h_tot_MJ_kg"]),
+            "h_tot_ratio": _f32(field["h_tot_ratio"]),
             "contours": contours,
         },
         "caveats": [
