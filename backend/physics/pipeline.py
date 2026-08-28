@@ -12,7 +12,7 @@ from .cea_rocket import run_rocket
 from .constants import IPG6S, NozzleGeometry
 from .derived import probe_quantities, probe_to_dict
 from .plume import CollisionlessPlume, marching_squares
-from .sudden_freeze import mix_d_hs, sudden_freeze_field
+from .sudden_freeze import KN_CRIT, kn_gll_exit, mix_d_hs, sudden_freeze_field
 
 DENSITY_LEVELS = [0.8, 0.5, 0.3, 0.2, 0.1, 0.05, 0.01]
 SPEED_LEVELS = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.3, 1.35]
@@ -34,7 +34,7 @@ def solve_operating_point(
     geometry: NozzleGeometry | None = None,
     ions: bool = True,
     include_contours: bool = True,
-    plume_mode: str = "collisionless",
+    plume_mode: str = "auto",
 ) -> dict[str, Any]:
     geom = geometry or IPG6S
     cea_res = run_rocket(
@@ -57,17 +57,29 @@ def solve_operating_point(
     )
     x = np.linspace(0.0, xmax_m, nx)
     y = np.linspace(-ymax_m, ymax_m, ny)
+    d_hs = mix_d_hs(ex.get("mole_fractions") or {})
+    kn_exit = kn_gll_exit(ex["n0"], ex["H"], d_hs)
+    requested = (plume_mode or "auto").strip().lower()
+    if requested in ("freeze", "collisional"):
+        requested = "sudden_freeze"
+    if requested in ("auto", ""):
+        chosen = "sudden_freeze" if kn_exit < KN_CRIT else "collisionless"
+    elif requested in ("sudden_freeze", "collisionless"):
+        chosen = requested
+    else:
+        chosen = "sudden_freeze" if kn_exit < KN_CRIT else "collisionless"
+
     field = plume.grid(x, y)
     freeze_meta = {
-        "mode": "collisionless",
-        "kn_gll_exit": None,
+        "mode": chosen,
+        "plume_mode_requested": requested or "auto",
+        "kn_gll_exit": kn_exit,
         "r_freeze_m": None,
         "theta_jet_deg": None,
-        "kn_crit": None,
-        "d_hs": None,
+        "kn_crit": KN_CRIT,
+        "d_hs": d_hs,
     }
-    if (plume_mode or "collisionless").strip().lower() in ("sudden_freeze", "freeze", "collisional"):
-        d_hs = mix_d_hs(ex.get("mole_fractions") or {})
+    if chosen == "sudden_freeze":
         field = sudden_freeze_field(
             x, y,
             T0=ex["T0"],
@@ -80,14 +92,14 @@ def solve_operating_point(
             d_hs=d_hs,
             collisionless=plume,
         )
-        freeze_meta = {
+        freeze_meta.update({
             "mode": "sudden_freeze",
-            "kn_gll_exit": field.get("kn_gll_exit"),
+            "kn_gll_exit": field.get("kn_gll_exit") or kn_exit,
             "r_freeze_m": field.get("r_freeze_m"),
             "theta_jet_deg": field.get("theta_jet_deg"),
-            "kn_crit": field.get("kn_crit"),
-            "d_hs": field.get("d_hs"),
-        }
+            "kn_crit": field.get("kn_crit") or KN_CRIT,
+            "d_hs": field.get("d_hs") or d_hs,
+        })
 
     # Frozen total enthalpy on the collisionless grid:
     # static h ≈ href + (h_exit − href) * T/T0, then add ½V².
@@ -126,6 +138,7 @@ def solve_operating_point(
             "H": plume.H,
             "thermal": plume.thermal,
             "mode": freeze_meta["mode"],
+            "plume_mode_requested": freeze_meta.get("plume_mode_requested"),
             "kn_gll_exit": freeze_meta["kn_gll_exit"],
             "r_freeze_m": freeze_meta["r_freeze_m"],
             "theta_jet_deg": freeze_meta["theta_jet_deg"],
@@ -226,7 +239,7 @@ def solve_cached(
     ymax_m: float,
     nx: int,
     ny: int,
-    plume_mode: str = "collisionless",
+    plume_mode: str = "auto",
 ) -> dict[str, Any]:
     mixture = json.loads(mix_key)
     geom = NozzleGeometry.from_mm(nozzle_name, d_c_mm, d_t_mm, d_e_mm)

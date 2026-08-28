@@ -26,6 +26,15 @@ from .plume import CollisionlessPlume
 KN_CRIT = 0.05  # Boyd Kn_GLL / Bird P-order freeze
 
 
+def kn_gll_exit(n0: float, H: float, d_hs: float) -> float:
+    """λ/H at the nozzle lip. Continuum if this is well below KN_CRIT."""
+    n0 = max(float(n0), 1.0)
+    H = max(float(H), 1e-6)
+    d_hs = max(float(d_hs), 1e-12)
+    lam = 1.0 / (np.sqrt(2.0) * np.pi * d_hs * d_hs * n0)
+    return float(lam / H)
+
+
 def mix_d_hs(mole_fractions: Mapping[str, float] | None) -> float:
     num = 0.0
     den = 0.0
