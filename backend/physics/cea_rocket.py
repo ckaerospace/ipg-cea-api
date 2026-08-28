@@ -411,6 +411,22 @@ DEFAULT_MDOT_MG_S_LINES: tuple[float, ...] = (2.0, 5.0, 8.0, 13.0, 20.0, 30.0, 5
 DEFAULT_POWER_W_LINES: tuple[float, ...] = (50.0, 150.0, 300.0, 450.0, 600.0)
 CHAR_AXES_PINJ_PA: tuple[float, float] = (0.0, 250.0)
 CHAR_AXES_HINJ_MJ_KG: tuple[float, float] = (0.0, 40.0)
+# IPG3/IPG4: g/s and kW, kPa-scale pinj. Chosen from published envelopes (Burghaus, Anih, Herdrich).
+IPG4_MDOT_MG_S_LINES: tuple[float, ...] = (1000.0, 1500.0, 2200.0, 3000.0, 3500.0, 4000.0, 5000.0)
+IPG4_POWER_W_LINES: tuple[float, ...] = (5e4, 8e4, 1.0e5, 1.2e5, 1.35e5, 1.6e5, 1.8e5)
+IPG3_MDOT_MG_S_LINES: tuple[float, ...] = (1000.0, 2000.0, 3210.0, 4000.0, 5000.0, 6000.0)
+IPG3_POWER_W_LINES: tuple[float, ...] = (4e4, 6e4, 8e4, 1.0e5, 1.2e5, 1.5e5)
+
+
+def _char_defaults(geom: NozzleGeometry) -> tuple[tuple[float, ...], tuple[float, ...], float]:
+    """mdot lines (mg/s), power lines (W), pinj axis max (Pa) for this nozzle."""
+    name = (geom.name or "").upper()
+    dt_mm = float(geom.d_t) * 1e3
+    if "IPG4" in name or (45 <= dt_mm <= 60):
+        return IPG4_MDOT_MG_S_LINES, IPG4_POWER_W_LINES, 5000.0
+    if "IPG3" in name or dt_mm >= 70:
+        return IPG3_MDOT_MG_S_LINES, IPG3_POWER_W_LINES, 3000.0
+    return DEFAULT_MDOT_MG_S_LINES, DEFAULT_POWER_W_LINES, 250.0
 
 _ALWAYS_X = ("O2", "O", "O+", "e-")
 _NO_DISSOCIATION = frozenset({"He", "Ar", "Ne", "Kr", "Xe", "O", "N", "C", "H", "e-"})
@@ -742,8 +758,9 @@ def characteristics_sweep(
     n = max(5, min(41, n))
     grid = np.linspace(h_min, h_max, n)
 
-    mdot_lines = _cap_line_values(mdot_mg_s_lines, DEFAULT_MDOT_MG_S_LINES)
-    power_lines = _cap_line_values(power_W_lines, DEFAULT_POWER_W_LINES)
+    d_mdot, d_power, pinj_axis_max = _char_defaults(geom)
+    mdot_lines = _cap_line_values(mdot_mg_s_lines, d_mdot)
+    power_lines = _cap_line_values(power_W_lines, d_power)
 
     hinj_ok: list[float] = []
     T_ch: list[float] = []
@@ -839,8 +856,8 @@ def characteristics_sweep(
         "mdot_isolines": mdot_isolines,
         "power_isolines": power_isolines,
         "axes": {
-            "pinj_Pa": [CHAR_AXES_PINJ_PA[0], CHAR_AXES_PINJ_PA[1]],
-            "hinj_MJ_kg": [CHAR_AXES_HINJ_MJ_KG[0], CHAR_AXES_HINJ_MJ_KG[1]],
+            "pinj_Pa": [0.0, pinj_axis_max],
+            "hinj_MJ_kg": [0.0, max(40.0, float(hinj_max))],
         },
         "notes": list(_CHAR_NOTES),
         "ions": bool(ions),
