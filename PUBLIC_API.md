@@ -45,7 +45,40 @@ X-API-Key: <only if the host set API_KEY>
 
 `nx` and `ny` are clamped to **17–80** (phone-safe grid). Sending 97×81 is accepted and capped at 80×80.
 
-Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s`, `converged`) and `plume` (`H`, `S0`, `T0`, `U0`, `n0`, `n_ratio`, `u`, `v`, `t_ratio` arrays). There is no top-level `probe`; interpolate the plume grid client-side.
+Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s`, `hinj_MJ_kg`, `delta_h_MJ_kg`, `converged`) and `plume` (`H`, `S0`, `T0`, `U0`, `n0`, `n_ratio`, `u`, `v`, `t_ratio`, `h_tot_MJ_kg`, `h_tot_ratio` arrays, plus `contours`). There is no top-level `probe`; interpolate the plume grid client-side.
+
+### Input modes
+
+`mode` on `/api/solve` (default `"enthalpy"`):
+
+- `"enthalpy"`: set `pinj_Pa` and `hinj_MJ_kg` (thesis assigned-enthalpy rocket problem). CEA returns `mdot_mg_s`.
+- `"generator"`: set `pinj_Pa` and `mdot_mg_s` (what the operator actually sets: injection pressure + MFC mass flow). The API **inverts CEA** for `hinj_MJ_kg` (mdot falls as enthalpy rises at fixed pinj). Do **not** send `power_W` for this; `hinj = P/ṁ` is the wrong inversion. Response includes inverted `cea.hinj_MJ_kg` / `cea.delta_h_MJ_kg` and `requested_mdot_mg_s`.
+
+Generator example (IPG6-S O2, ~thesis point 2):
+
+```json
+{
+  "mode": "generator",
+  "pinj_Pa": 100,
+  "mdot_mg_s": 13,
+  "mixture": { "O2": 1.0 },
+  "basis": "mole",
+  "d_c_mm": 37,
+  "d_t_mm": 20,
+  "d_e_mm": 40,
+  "nozzle_name": "IPG6-S",
+  "nx": 49,
+  "ny": 49
+}
+```
+
+### Total enthalpy field
+
+Frozen suggestion on the collisionless grid:
+
+`h_static ≈ href + (h_exit − href) · (T/T0)` then `h_tot = h_static + ½(u²+v²)`.
+
+Arrays: `plume.h_tot_MJ_kg`, `plume.h_tot_ratio` (`h_tot / hinj`). Contours under `plume.contours.h_tot`.
 
 ### Mixture preview
 
