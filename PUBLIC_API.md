@@ -180,6 +180,7 @@ Allowed `Origin` values (reflected on the response):
 - `https://grok.com` and `https://*.grok.com`
 - `http://localhost`, `http://localhost:<port>`
 - `http://127.0.0.1`, `http://127.0.0.1:<port>`
+- `https://*.onrender.com`
 
 Preflight: `OPTIONS /api/*` with `Access-Control-Request-Method` / `Access-Control-Request-Headers`. Allowed request headers include `Content-Type` and `X-API-Key`. Other origins get no `Access-Control-Allow-Origin`.
 
