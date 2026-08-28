@@ -15,6 +15,7 @@ CORS_ORIGIN_REGEX = (
     r"|https://([a-zA-Z0-9-]+\.)*grok\.com"
     r"|http://localhost(:\d+)?"
     r"|http://127\.0\.0\.1(:\d+)?"
+    r"|https://([a-zA-Z0-9-]+\.)*onrender\.com"
 )
 
 _ORIGIN_RE = re.compile(rf"^(?:{CORS_ORIGIN_REGEX})$")
