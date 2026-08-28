@@ -12,6 +12,7 @@ Base URL: the Render / Railway host, e.g. `https://YOUR-SERVICE.onrender.com`. A
 | `GET` | `/api/catalog` | `X-API-Key` if `API_KEY` set | — |
 | `POST` | `/api/mixture-preview` | same | JSON mixture |
 | `POST` | `/api/solve` | same | JSON (below) |
+| `POST` | `/api/characteristics` | same | JSON (below) |
 | `OPTIONS` | `/api/*` | never (CORS preflight) | — |
 
 **Solve URL path:** `POST /api/solve`
@@ -51,7 +52,7 @@ Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s
 
 `mode` on `/api/solve` (default `"enthalpy"`):
 
-- `"enthalpy"`: set `pinj_Pa` and `hinj_MJ_kg` (thesis assigned-enthalpy rocket problem). CEA returns `mdot_mg_s`.
+- `"enthalpy"` (alias `"point"`): set `pinj_Pa` and `hinj_MJ_kg` (assigned-enthalpy rocket problem). CEA returns `mdot_mg_s`. Clicking a point on the characteristics plot is this mode — no extra invert.
 - `"generator"`: set `pinj_Pa` and `mdot_mg_s` (what the operator actually sets: injection pressure + MFC mass flow). The API **inverts CEA** for `hinj_MJ_kg` (mdot falls as enthalpy rises at fixed pinj). Do **not** send `power_W` for this; `hinj = P/ṁ` is the wrong inversion. Response includes inverted `cea.hinj_MJ_kg` / `cea.delta_h_MJ_kg` and `requested_mdot_mg_s`.
 
 Generator example (IPG6-S O2, ~thesis point 2):
@@ -94,6 +95,82 @@ Content-Type: application/json
 Returns `MW`, `R`, `h_ref_MJ_kg`, mole/mass fractions. Air as `{"Air": 1}` expands to N₂/O₂ 79/21; CEA is never sent the reactant name `"Air"`.
 
 `GET /api/catalog` lists facilities, gas chips, thesis presets (IPG6-S (1)(2)(3), IPG3 O#01, IPG4 Burghaus).
+
+
+## Characteristics field (`POST /api/characteristics`)
+
+One hinj sweep at a single `pinj_ref` (~20–30 NASA CEA rocket calls, not a 2-D grid). Returns isolines for the (pinj, hinj) operating map and chamber/exit mole fractions vs hinj.
+
+Approximation: at fixed hinj, composition and T are only weakly p-dependent, so `mdot ≈ k(h) · pinj` with `k(h) = mdot(h, pinj_ref) / pinj_ref`.
+
+- Solid isolines: constant `mdot` (default 2, 5, 8, 13, 20, 30, 50 mg/s). `pinj(h) = mdot_target / k(h)`.
+- Dashed isolines: coupled power `P = mdot · (hinj − href)` in W (default 50, 150, 300, 450, 600). `mdot = P / ((hinj − href)·1e6)`, then `pinj = mdot / k(h)`.
+- Kinks on the mdot isolines are detected from the sweep (finite differences on chamber mole fractions): start/end of parent-molecule dissociation and start of ionization. For pure O2 they typically sit near ~2, ~21, ~28 MJ/kg. For N2/CO2/He mixes the parent is the dominant molecule (atomic gases skip dissociation kinks).
+- Failed CEA hinj points are skipped.
+
+Plot axes for the (pinj, hinj) map: pinj 0–250 Pa, hinj 0–40 MJ/kg. Companion composition plot: chamber mole fractions vs hinj at `pinj_ref` (composition is nearly independent of pinj).
+
+Click a point `(pinj_Pa, hinj_MJ_kg)` then `POST /api/solve` with those two fields (`mode` omitted, `"enthalpy"`, or `"point"`). Same geometry and mixture as the sweep.
+
+```http
+POST /api/characteristics
+Content-Type: application/json
+```
+
+```json
+{
+  "pinj_ref_Pa": 100,
+  "mixture": { "O2": 1.0 },
+  "basis": "mole",
+  "d_c_mm": 37,
+  "d_t_mm": 20,
+  "d_e_mm": 40,
+  "nozzle_name": "IPG6-S",
+  "hinj_max": 40,
+  "n_h": 29,
+  "ions": true
+}
+```
+
+Optional body fields: `gas`, `he_mole_frac` (legacy mix), `hinj_min` (default `href+0.2`), `mdot_mg_s_lines`, `power_W_lines`. `n_h` defaults to 29 and is capped at 41.
+
+Response shape:
+
+```json
+{
+  "pinj_ref_Pa": 100.0,
+  "href_MJ_kg": 0.0,
+  "geometry": { "name": "IPG6-S", "d_c_mm": 37.0, "d_t_mm": 20.0, "d_e_mm": 40.0 },
+  "hinj_MJ_kg": [0.2, "..."],
+  "chamber": {
+    "T": ["..."],
+    "MW": ["..."],
+    "mdot_mg_s": ["..."],
+    "x": { "O2": ["..."], "O": ["..."], "O+": ["..."], "e-": ["..."] }
+  },
+  "exit": {
+    "T0": ["..."],
+    "MW": ["..."],
+    "x": { "O2": ["..."], "O": ["..."], "O+": ["..."], "e-": ["..."] }
+  },
+  "kinks": [
+    { "hinj_MJ_kg": 2.0, "kind": "dissociation_start", "label": "O2 dissociation start" }
+  ],
+  "mdot_isolines": [
+    { "mdot_mg_s": 13.0, "pinj_Pa": ["..."], "hinj_MJ_kg": ["..."] }
+  ],
+  "power_isolines": [
+    { "power_W": 300.0, "pinj_Pa": ["..."], "hinj_MJ_kg": ["..."] }
+  ],
+  "axes": { "pinj_Pa": [0, 250], "hinj_MJ_kg": [0, 40] },
+  "notes": [
+    "mdot isolines use mdot ≈ k(h)·pinj at fixed hinj (composition weakly p-dependent).",
+    "Kinks mark composition change: energy into dissociation/ionization, T and pinj rise more slowly."
+  ]
+}
+```
+
+`chamber.x` / `exit.x` always include O2, O, O+, e- and any other species whose mole fraction exceeds 1e-3 somewhere on the sweep. Extra keys `k_kg_s_Pa`, `ions`, `parent_molecule` are also returned.
 
 ## CORS
 
