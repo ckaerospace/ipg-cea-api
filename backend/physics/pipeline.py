@@ -12,6 +12,7 @@ from .cea_rocket import run_rocket
 from .constants import IPG6S, NozzleGeometry
 from .derived import probe_quantities, probe_to_dict
 from .plume import CollisionlessPlume, marching_squares
+from .sudden_freeze import mix_d_hs, sudden_freeze_field
 
 DENSITY_LEVELS = [0.8, 0.5, 0.3, 0.2, 0.1, 0.05, 0.01]
 SPEED_LEVELS = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.3, 1.35]
@@ -33,6 +34,7 @@ def solve_operating_point(
     geometry: NozzleGeometry | None = None,
     ions: bool = True,
     include_contours: bool = True,
+    plume_mode: str = "collisionless",
 ) -> dict[str, Any]:
     geom = geometry or IPG6S
     cea_res = run_rocket(
@@ -56,6 +58,36 @@ def solve_operating_point(
     x = np.linspace(0.0, xmax_m, nx)
     y = np.linspace(-ymax_m, ymax_m, ny)
     field = plume.grid(x, y)
+    freeze_meta = {
+        "mode": "collisionless",
+        "kn_gll_exit": None,
+        "r_freeze_m": None,
+        "theta_jet_deg": None,
+        "kn_crit": None,
+        "d_hs": None,
+    }
+    if (plume_mode or "collisionless").strip().lower() in ("sudden_freeze", "freeze", "collisional"):
+        d_hs = mix_d_hs(ex.get("mole_fractions") or {})
+        field = sudden_freeze_field(
+            x, y,
+            T0=ex["T0"],
+            R_specific=ex["R"],
+            U0=ex["U0"],
+            n0=ex["n0"],
+            H=ex["H"],
+            gamma=float(ex.get("gamma") or 1.4),
+            Mach_e=float(ex.get("Mach") or 1.2),
+            d_hs=d_hs,
+            collisionless=plume,
+        )
+        freeze_meta = {
+            "mode": "sudden_freeze",
+            "kn_gll_exit": field.get("kn_gll_exit"),
+            "r_freeze_m": field.get("r_freeze_m"),
+            "theta_jet_deg": field.get("theta_jet_deg"),
+            "kn_crit": field.get("kn_crit"),
+            "d_hs": field.get("d_hs"),
+        }
 
     # Frozen total enthalpy on the collisionless grid:
     # static h ≈ href + (h_exit − href) * T/T0, then add ½V².
@@ -93,6 +125,12 @@ def solve_operating_point(
             "n0": plume.n0,
             "H": plume.H,
             "thermal": plume.thermal,
+            "mode": freeze_meta["mode"],
+            "kn_gll_exit": freeze_meta["kn_gll_exit"],
+            "r_freeze_m": freeze_meta["r_freeze_m"],
+            "theta_jet_deg": freeze_meta["theta_jet_deg"],
+            "kn_crit": freeze_meta["kn_crit"],
+            "d_hs": freeze_meta["d_hs"],
             "xmax_m": xmax_m,
             "ymax_m": ymax_m,
             "nx": nx,
@@ -110,7 +148,8 @@ def solve_operating_point(
         },
         "caveats": [
             "CEA is equilibrium chemistry and can under-predict dissociation/ions relative to the RF plasma.",
-            "The plume is a 2-D planar collisionless jet applied to a round nozzle: H = D_E/2.",
+            "The default plume is a 2-D planar collisionless jet applied to a round nozzle: H = D_E/2.",
+            "plume_mode=sudden_freeze uses isentropic source flow until Kn_GLL=0.05 (Boyd/Bird), then freezes T.",
             "Atomic-oxygen kinetic energy in the tunnel is typically 2–3.8 eV, below Venus aerobraking (8.3 eV).",
             "Catalytic heat flux is a fully-catalytic (γ=1) upper-bound estimate from O recombination when O is present.",
         ],
@@ -187,6 +226,7 @@ def solve_cached(
     ymax_m: float,
     nx: int,
     ny: int,
+    plume_mode: str = "collisionless",
 ) -> dict[str, Any]:
     mixture = json.loads(mix_key)
     geom = NozzleGeometry.from_mm(nozzle_name, d_c_mm, d_t_mm, d_e_mm)
@@ -201,4 +241,5 @@ def solve_cached(
         nx=nx,
         ny=ny,
         geometry=geom,
+        plume_mode=plume_mode,
     )
