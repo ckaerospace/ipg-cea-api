@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.responses import Response
 
-from physics.cea_rocket import CEA_VERSION, co2_enthalpy_20C, hp_equilibrium_o2
+from physics.cea_rocket import CEA_VERSION, co2_enthalpy_20C, hinj_for_target_mdot, hp_equilibrium_o2
 from physics.constants import (
     ADVANCED_SPECIES,
     COMMON_GASES,
@@ -62,6 +62,7 @@ class SolveRequest(BaseModel):
     ymax_m: float = Field(1.0, gt=0.2, lt=2.0)
     nx: int = Field(65, ge=GRID_MIN, le=GRID_MAX)
     ny: int = Field(65, ge=GRID_MIN, le=GRID_MAX)
+    mode: str = Field("enthalpy", description="enthalpy | generator")
     # legacy
     gas: Optional[str] = None
     he_mole_frac: float = Field(0.0, ge=0.0, le=0.99)
@@ -156,10 +157,20 @@ def species_check(name: str) -> dict[str, Any]:
 
 @app.post("/api/solve")
 def solve(req: SolveRequest) -> dict[str, Any]:
+    mode = (req.mode or "enthalpy").strip().lower()
+    if mode not in ("enthalpy", "generator", "power"):
+        raise HTTPException(status_code=400, detail="mode must be enthalpy, generator, or power")
+
     hinj = req.hinj_MJ_kg
-    if req.power_W is not None and req.mdot_mg_s is not None and req.mdot_mg_s > 0:
-        hinj = req.power_W / (req.mdot_mg_s * 1e-6) / 1e6
-        hinj = float(max(-15.0, min(hinj, 80.0)))
+    # Generator setup: operators set ṁ (MFC) and measure pinj; invert CEA for hinj.
+    # Do NOT use P/ṁ — that is not how IPG enthalpy is recovered.
+    if mode == "generator":
+        if req.mdot_mg_s is None or req.mdot_mg_s <= 0:
+            raise HTTPException(status_code=400, detail="generator mode needs mdot_mg_s > 0 plus pinj_Pa")
+    elif mode == "power":
+        if req.power_W is not None and req.mdot_mg_s is not None and req.mdot_mg_s > 0:
+            hinj = req.power_W / (req.mdot_mg_s * 1e-6) / 1e6
+            hinj = float(max(-15.0, min(hinj, 80.0)))
 
     mixture = req.mixture
     if not mixture and req.gas:
@@ -183,7 +194,19 @@ def solve(req: SolveRequest) -> dict[str, Any]:
             basis = "mole"
         else:
             basis = req.basis
-        return solve_cached(
+
+        if mode == "generator":
+            geom = NozzleGeometry.from_mm(req.nozzle_name or "custom", d_c, d_t, d_e)
+            mix_dict = json.loads(mix_key)
+            hinj, _ = hinj_for_target_mdot(
+                pinj_Pa=float(req.pinj_Pa),
+                mdot_mg_s=float(req.mdot_mg_s),
+                geometry=geom,
+                mixture=mix_dict,
+                basis=basis,
+            )
+
+        payload = solve_cached(
             float(req.pinj_Pa),
             float(round(hinj, 4)),
             mix_key,
@@ -197,6 +220,10 @@ def solve(req: SolveRequest) -> dict[str, Any]:
             int(req.nx),
             int(req.ny),
         )
+        payload["mode"] = mode
+        if mode == "generator":
+            payload["requested_mdot_mg_s"] = float(req.mdot_mg_s)
+        return payload
     except (UnknownSpecies, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
