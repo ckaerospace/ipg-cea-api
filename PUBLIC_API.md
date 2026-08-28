@@ -155,3 +155,20 @@ PYTHONPATH=backend python3 -m uvicorn app:app --app-dir backend --host 0.0.0.0 -
 ```
 
 Set `API_KEY` in the Render dashboard if you want to require `X-API-Key` — do not commit secrets. Confirm CEA with `GET /api/health` → `cea_version` like `3.3.3`.
+
+
+### Plume mode
+
+`plume_mode` on `/api/solve` (default `"auto"`):
+
+- `"collisionless"`: Khasawneh–Cai 2-D free-molecular jet from the exit slit (original).
+- `"sudden_freeze"`: planar isentropic source flow (collisions on) until Boyd `Kn_GLL = λ/R` reaches 0.05, then translational T freezes and density continues as 1/R. Outside the Prandtl–Meyer vacuum cone the collisionless jet is used. Response `plume.mode`, `plume.kn_gll_exit`, `plume.r_freeze_m`.
+
+- `"auto"` (default): if `Kn_exit = λ/H` at the lip is below 0.05, use sudden-freeze; otherwise collisionless. Response also has `plume.plume_mode_requested`.
+
+Grid extras on `plume`:
+
+- `mach`: local Mach \(U / \sqrt{\gamma R T}\) with \(T = (T/T_0) T_0\).
+- `e_kin_eV`: directed particle kinetic energy \( \tfrac12 \bar m U^2 \) in eV (mixture-mean mass).
+- `e_O_eV`: same for atomic oxygen, \( \tfrac12 m_O U^2 \). Probe also returns `e_th_eV` = \( \tfrac32 kT \).
+
