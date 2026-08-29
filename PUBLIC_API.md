@@ -50,7 +50,7 @@ Optional `p_tank_Pa` (default **10.0**, `gt=0.05`, `lt=2e5`) is the ambient pres
 
 Thesis PWA clients send `"plume_mode": "collisionless"` and do not rely on `p_tank_Pa` for the field. Advanced clients send `"auto"` or `"sudden_freeze"` and may send `p_tank_Pa`.
 
-Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s`, `hinj_MJ_kg`, `delta_h_MJ_kg`, `converged`) and `plume` (`H`, `S0`, `T0`, `U0`, `n0`, `n_ratio`, `u`, `v`, `t_ratio`, `h_tot_MJ_kg`, `h_tot_ratio` arrays, plus `contours`). There is no top-level `probe`; interpolate the plume grid client-side. CEA already reports `exit.p_Pa` (`p_e`); nozzle pressure ratio is `NPR = p_e / p_tank`.
+Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s`, `hinj_MJ_kg`, `delta_h_MJ_kg`, `converged`) and `plume` (`H`, `S0`, `T0`, `U0`, `n0`, `n_ratio`, `u`, `v`, `t_ratio`, `h_tot_MJ_kg`, `h_tot_ratio` arrays, plus `contours` and `probe`). Pointwise interpolation of the plume grid is still client-side; the optional calorimeter disk is `plume.probe` (JSON `null` if `probe_x_m` is omitted). CEA already reports `exit.p_Pa` (`p_e`); nozzle pressure ratio is `NPR = p_e / p_tank`.
 
 ### Input modes
 
@@ -300,7 +300,82 @@ Grid extras on `plume`:
 
 - `mach`: local Mach \(U / \sqrt{\gamma R T}\) with \(T = (T/T_0) T_0\).
 - `e_kin_eV`: directed particle kinetic energy \( \tfrac12 \bar m U^2 \) in eV (mixture-mean mass).
-- `e_O_eV`: same for atomic oxygen, \( \tfrac12 m_O U^2 \). Probe also returns `e_th_eV` = \( \tfrac32 kT \).
+- `e_O_eV`: same for atomic oxygen, \( \tfrac12 m_O U^2 \).
+
+### Optional sample disk (`plume.probe`)
+
+All three body fields are optional. If `probe_x_m` is omitted, `plume.probe` is `null` (old clients unchanged).
+
+| Field | Default | Limits | Meaning |
+|---|---|---|---|
+| `probe_x_m` | omitted | `> 0`, `< xmax_m` | Station of a circular disk on the axis (`y = 0`). Face in the *yz* plane (normal along *x*), intercepting the jet on the upstream face. |
+| `probe_r_mm` | `20` | `2`–`80` | Disk radius. |
+| `probe_Tw_K` | `300` | `200`–`2000` | Wall temperature (water-cooled calorimeter default). |
+
+The incident state is sampled from the **existing** plume field at `(probe_x_m, 0)` *before* inserting a body: `n_inf`, `T_inf`, `U_inf`. The object Knudsen number is `kn_obj = λ / probe_r` at that state, with `λ = 1 / (√2 π d_hs² n)` and `KN_CRIT = 0.05`.
+
+**Regime**
+
+- `kinetic` (`model`: `khasawneh_diffuse`) if `plume.mode` is `collisionless` **or** `kn_obj >= 0.05`.
+- `continuum` (`model`: `newtonian_billig`) if `kn_obj < 0.05` **and** the field is sudden-freeze / auto-continuum (`plume.mode == sudden_freeze`).
+
+**Kinetic / free-molecular.** Khasawneh–Cai incident flux on the forward face of a drifting Maxwellian equal to the sampled state; fully diffuse re-emission at `Tw` with accommodation `α = 1`. Wall pressure `p_w` is incident plus re-emitted normal momentum. Heat `q_w` is incident translational energy minus wall re-emission. No chemistry catalysis in v1. No bow shock is drawn on this path. Collisionless geometric shadow (zero / incident-only downstream of the disk in `|y| < R`, `x > x_p`) is **omitted in v1**; the returned `n_ratio`/`u`/`v`/`t_ratio` arrays are the undisturbed field.
+
+**Continuum.** Engineering blunt-face closure, not Euler/NS/DSMC:
+
+- Billig (1967) sphere-like standoff on a blunt face: `Δ/R ≈ 0.143 exp(3.24/M²)`, plus the hyperbolic shock with vertex radius `R_c/R = 1.143 exp[0.54/(M−1)^{1.2}]`. Optional draw-data `bow_xy` is the upper-half polyline in plume `(x, y)`.
+- Modified Newtonian on the forward face: `p = p_inf + (p_t2 − p_inf) cos²θ`. Stagnation `p_stag` is the Rayleigh–Pitot `p_t2`; for a flat face `θ = 0` so the area-average `p_w` equals `p_stag`.
+- Heat: Sutton–Graves stagnation `q_stag` for a sphere of radius `R` and cold wall `Tw`, `q = K (p_s/R)^{1/2} (h_s − h_w)` with `p_s` in atm (NASA TR R-376 eq. 33). Face average `q_w = (2/3) q_stag` (frontal-area mean of a `q/q_s = cos θ` distribution on an equivalent spherical nose). Not a 2-D NS body.
+
+Response `plume.probe` (or `null`):
+
+```json
+{
+  "x_m": 0.4,
+  "r_mm": 20.0,
+  "Tw_K": 300.0,
+  "kn_obj": 1.2,
+  "regime": "kinetic",
+  "n_inf": 1.0e18,
+  "T_inf": 800.0,
+  "U_inf": 2500.0,
+  "p_w_Pa": 12.3,
+  "q_w_W_m2": 4.5e4,
+  "p_stag_Pa": null,
+  "q_stag_W_m2": null,
+  "bow_xy": [],
+  "model": "khasawneh_diffuse",
+  "notes": ["Translational heat only; no chemistry catalysis in v1."]
+}
+```
+
+`p_stag_Pa` and `q_stag_W_m2` are continuum-only (`null` in kinetic). `bow_xy` is `[[x, y], ...]` or `[]`. `T0` on the plume is nozzle-exit translational temperature.
+
+Example with a disk:
+
+```json
+{
+  "pinj_Pa": 100,
+  "hinj_MJ_kg": 23,
+  "mixture": { "O2": 1.0 },
+  "d_c_mm": 37,
+  "d_t_mm": 20,
+  "d_e_mm": 40,
+  "plume_mode": "collisionless",
+  "probe_x_m": 0.4,
+  "probe_r_mm": 20,
+  "probe_Tw_K": 300,
+  "nx": 33,
+  "ny": 33
+}
+```
+
+### Citations
+
+- Khasawneh, K., Liu, H., and Cai, C., “Highly rarefied two-dimensional jet impingement on a flat plate,” *Phys. Fluids* **22**, 117101 (2010). doi:[10.1063/1.3490409](https://doi.org/10.1063/1.3490409)
+- Cai, C. and Boyd, I. D., “Theoretical and Numerical Study of Free Molecular-Flow Problems,” *J. Spacecraft and Rockets* **44**(3) 619–624 (2007). doi:[10.2514/1.25893](https://doi.org/10.2514/1.25893)
+- Billig, F. S., “Shock-wave shapes around spherical- and cylindrical-nosed bodies,” *J. Spacecraft and Rockets* **4**(6) 822–823 (1967). doi:[10.2514/3.28969](https://doi.org/10.2514/3.28969)
+- Sutton, K. and Graves, R. A., Jr., “A general stagnation-point convective-heating equation for arbitrary gas mixtures,” NASA TR R-376 (1971). [NTRS 19720003329](https://ntrs.nasa.gov/citations/19720003329)
 
 ## References
 
@@ -310,6 +385,8 @@ Grid extras on `plume`:
 - Boyd, I. D., Chen, G., & Candler, G. V. (1995). Predicting failure of the continuum fluid equations in transitional hypersonic flows. *Phys. Fluids* 7, 210–219. doi:10.1063/1.868720
 - Cai, C., & Boyd, I. D. (2007). Theoretical and numerical study of free molecular-flow problems. *J. Spacecraft Rockets* 44(3), 619–624. doi:10.2514/1.25893
 - Khasawneh, K. R., Liu, H., & Cai, C. (2010). Highly rarefied two-dimensional jet impingement on a flat plate. *Phys. Fluids* 22. doi:10.1063/1.3490409
+- Billig, F. S. (1967). Shock-wave shapes around spherical- and cylindrical-nosed bodies. *J. Spacecraft Rockets* 4(6), 822–823. doi:10.2514/3.28969
+- Sutton, K., & Graves, R. A., Jr. (1971). A general stagnation-point convective-heating equation for arbitrary gas mixtures. NASA TR R-376. https://ntrs.nasa.gov/citations/19720003329
 - Crist, S., Sherman, P. M., & Glass, D. R. (1966). Study of the highly underexpanded sonic jet. *AIAA J.* 4(1), 68–71. doi:10.2514/3.3386
 - Addy, A. L. (1981). Effects of axisymmetric sonic nozzle geometry on Mach disk characteristics. *AIAA J.* 19(1), 121–122. doi:10.2514/3.7751
 - Ashkenas, H., & Sherman, F. S. (1966). The structure and utilization of supersonic free jets in low density wind tunnels. *Rarefied Gas Dynamics*.

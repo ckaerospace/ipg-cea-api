@@ -12,6 +12,7 @@ from .cea_rocket import run_rocket
 from .constants import E_CHARGE, IPG6S, K_B, M_O, M_U, NozzleGeometry
 from .derived import probe_quantities, probe_to_dict
 from .plume import CollisionlessPlume, marching_squares
+from .sample_disk import evaluate_sample_disk
 from .shocks import attach_shock_overlay
 from .sudden_freeze import KN_CRIT, kn_gll_exit, mix_d_hs, resolve_plume_mode, sudden_freeze_field
 
@@ -227,6 +228,7 @@ def assemble_plume(
             "h_tot_MJ_kg": _f32(field["h_tot_MJ_kg"]),
             "h_tot_ratio": _f32(field["h_tot_ratio"]),
             "contours": contours,
+            "probe": None,
         },
         "caveats": [
             "CEA is equilibrium chemistry and can under-predict dissociation/ions relative to the RF plasma.",
@@ -244,6 +246,8 @@ def interpolate_field(payload: dict[str, Any], xq: float, yq: float) -> dict[str
     x = np.asarray(p["x"])
     y = np.asarray(p["y"])
     nx, ny = int(p["nx"]), int(p["ny"])
+    if nx < 2 or ny < 2 or x.size < 2 or y.size < 2:
+        return {"n_ratio": 0.0, "u": 0.0, "v": 0.0, "t_ratio": 0.0, "h_tot_MJ_kg": 0.0}
 
     def reshape(key: str) -> np.ndarray:
         return np.asarray(p[key], dtype=np.float64).reshape(ny, nx)
@@ -271,6 +275,72 @@ def interpolate_field(payload: dict[str, Any], xq: float, yq: float) -> dict[str
     for extra in ("speed", "mach", "e_kin_eV", "e_O_eV", "h_tot_MJ_kg", "h_tot_ratio"):
         if extra in p:
             out[extra] = bl(reshape(extra))
+    return out
+
+
+def attach_sample_disk(
+    payload: dict[str, Any],
+    probe_x_m: float | None,
+    probe_r_mm: float = 20.0,
+    probe_Tw_K: float = 300.0,
+) -> dict[str, Any]:
+    """Attach plume.probe. Copies the plume dict so the solve cache is not mutated."""
+    out = dict(payload)
+    plume = dict(payload.get("plume") or {})
+    out["plume"] = plume
+    if probe_x_m is None:
+        plume["probe"] = None
+        return out
+    try:
+        samp = interpolate_field(payload, float(probe_x_m), 0.0)
+    except Exception:
+        samp = {"n_ratio": 0.0, "u": 0.0, "v": 0.0, "t_ratio": 0.0, "h_tot_MJ_kg": 0.0}
+    ex = (payload.get("cea") or {}).get("exit") or {}
+    n0 = float(ex.get("n0") or 0.0)
+    T0 = float(ex.get("T0") or 0.0)
+    n_inf = max(float(samp.get("n_ratio") or 0.0), 0.0) * max(n0, 0.0)
+    T_inf = max(float(samp.get("t_ratio") or 0.0), 0.0) * max(T0, 0.0)
+    u = float(samp.get("u") or 0.0)
+    v = float(samp.get("v") or 0.0)
+    U_inf = float(np.hypot(max(u, 0.0), v))
+    R_specific = float(ex.get("R") or 1.0)
+    gamma = float(ex.get("gamma") or 1.4)
+    mf = ex.get("mole_fractions") or {}
+    mix = (payload.get("cea") or {}).get("mixture") or {}
+    mass = mix.get("mass_fractions")
+    h_tot = samp.get("h_tot_MJ_kg")
+    h_tot_J = None if h_tot is None else float(h_tot) * 1e6
+    mode = str(plume.get("mode") or "collisionless")
+    try:
+        plume["probe"] = evaluate_sample_disk(
+            x_m=float(probe_x_m),
+            r_m=float(probe_r_mm) * 1e-3,
+            Tw_K=float(probe_Tw_K),
+            n_inf=n_inf,
+            T_inf=T_inf,
+            U_inf=U_inf,
+            R_specific=R_specific,
+            gamma=gamma,
+            plume_mode=mode,
+            mole_fractions=mf,
+            mass_fractions=mass,
+            h_tot_J_kg=h_tot_J,
+        )
+    except Exception:
+        plume["probe"] = evaluate_sample_disk(
+            x_m=float(probe_x_m),
+            r_m=float(probe_r_mm) * 1e-3,
+            Tw_K=float(probe_Tw_K),
+            n_inf=0.0,
+            T_inf=0.0,
+            U_inf=0.0,
+            R_specific=max(R_specific, 1.0),
+            gamma=gamma,
+            plume_mode=mode,
+            mole_fractions=mf,
+            mass_fractions=mass,
+            h_tot_J_kg=None,
+        )
     return out
 
 
