@@ -69,8 +69,16 @@ class SolveRequest(BaseModel):
     nx: int = Field(65, ge=GRID_MIN, le=GRID_MAX)
     ny: int = Field(65, ge=GRID_MIN, le=GRID_MAX)
     mode: str = Field("enthalpy", description="enthalpy | generator | power | point")
-    plume_mode: str = Field("auto", description="auto | collisionless | sudden_freeze")
-    p_tank_Pa: float = Field(10.0, gt=0.05, lt=2e5, description="Ambient / tank pressure for the shock overlay")
+    plume_mode: str = Field(
+        "auto",
+        description="auto | collisionless | sudden_freeze. Omit for auto (Kn trigger). Thesis clients send collisionless.",
+    )
+    p_tank_Pa: float = Field(
+        10.0,
+        gt=0.05,
+        lt=2e5,
+        description="Ambient pressure for the continuum shock overlay (ignored for the field when plume_mode=collisionless)",
+    )
     # legacy
     gas: Optional[str] = None
     he_mole_frac: float = Field(0.0, ge=0.0, le=0.99)

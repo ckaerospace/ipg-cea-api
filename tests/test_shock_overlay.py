@@ -108,6 +108,29 @@ def test_high_kn_collisionless_no_barrel_even_if_npr_huge():
 def test_chips_override_auto():
     assert resolve_plume_mode("collisionless", 0.001) == ("collisionless", "collisionless")
     assert resolve_plume_mode("sudden_freeze", 0.20) == ("sudden_freeze", "sudden_freeze")
+    assert resolve_plume_mode("auto", 0.001)[1] == "sudden_freeze"
+    assert resolve_plume_mode("", 0.20)[0] == "auto"
+
+
+def test_collisionless_hard_override_ignores_p_tank_for_field():
+    """Thesis sends collisionless: no barrel/disk even at low Kn and huge NPR."""
+    p_e, p_tank = 400.0, 0.08
+    plan = _plan(
+        p_e_Pa=p_e,
+        p_tank_Pa=p_tank,
+        kn_exit=0.001,
+        r_freeze_m=5.0,
+        mode="collisionless",
+    )
+    assert plan["shock_applied"] is False
+    assert plan["shock_reason"] == "collisionless"
+    assert plan["barrel_xy"] == []
+    assert plan["x_mach_disk_m"] is None
+    assert plan["disk_y0"] is None and plan["disk_y1"] is None
+    # Diagnostics still echo NPR if a tank pressure was sent.
+    assert plan["p_e_Pa"] == p_e
+    assert plan["p_tank_Pa"] == p_tank
+    assert plan["npr"] == pytest.approx(p_e / p_tank)
 
 
 def test_matched_no_shock():

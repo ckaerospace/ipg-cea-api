@@ -229,9 +229,15 @@ def plan_shock(
     Me = float(max(Mach_e, 1.05))
     r_freeze = float(r_freeze_m) if r_freeze_m is not None and np.isfinite(r_freeze_m) else None
 
-    if mode == "collisionless" or (kn_exit >= kn_crit and mode != "sudden_freeze"):
-        # Kn is the auto trigger; a collisionless chip also skips the overlay.
-        # Forced sudden_freeze still reaches the freeze veto below.
+    # Thesis / collisionless chip: hard override. p_tank is diagnostics only —
+    # never a barrel, disk, or field mutation, even at huge NPR or low Kn.
+    if mode == "collisionless":
+        regime = "vacuum" if npr_regime == "underexpanded" else npr_regime
+        if npr_regime == "matched":
+            regime = "matched"
+        return _empty_shock(pe, pt, regime=regime, reason="collisionless")
+    if kn_exit >= kn_crit and mode != "sudden_freeze":
+        # Auto path already chose collisionless; keep the same empty overlay.
         regime = "vacuum" if npr_regime == "underexpanded" else npr_regime
         if npr_regime == "matched":
             regime = "matched"

@@ -40,14 +40,15 @@ X-API-Key: <only if the host set API_KEY>
   "xmax_m": 2.0,
   "ymax_m": 1.0,
   "nx": 65,
-  "ny": 65,
-  "p_tank_Pa": 10.0
+  "ny": 65
 }
 ```
 
 `nx` and `ny` are clamped to **17–80** (phone-safe grid). Sending 97×81 is accepted and capped at 80×80.
 
 Optional `p_tank_Pa` (default **10.0**, `gt=0.05`, `lt=2e5`) is the ambient pressure used only for the continuum shock overlay. Old clients that omit it keep working.
+
+Thesis PWA clients send `"plume_mode": "collisionless"` and do not rely on `p_tank_Pa` for the field. Advanced clients send `"auto"` or `"sudden_freeze"` and may send `p_tank_Pa`.
 
 Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s`, `hinj_MJ_kg`, `delta_h_MJ_kg`, `converged`) and `plume` (`H`, `S0`, `T0`, `U0`, `n0`, `n_ratio`, `u`, `v`, `t_ratio`, `h_tot_MJ_kg`, `h_tot_ratio` arrays, plus `contours`). There is no top-level `probe`; interpolate the plume grid client-side. CEA already reports `exit.p_Pa` (`p_e`); nozzle pressure ratio is `NPR = p_e / p_tank`.
 
@@ -240,13 +241,20 @@ Set `API_KEY` in the Render dashboard if you want to require `X-API-Key` — do 
 
 ### Plume mode
 
-`plume_mode` on `/api/solve` (default `"auto"`). **Knudsen number is the only mode trigger.**
+`plume_mode` on `/api/solve` (default `"auto"` when omitted, so old clients do not break). **Knudsen number is the only Auto trigger.**
 
 `Kn_exit = λ/H` at the lip. `KN_CRIT = 0.05` (Boyd `Kn_GLL` / Bird P-order).
 
-- `"collisionless"`: Khasawneh–Cai 2-D free-molecular jet from the exit slit (original). Chip overrides Auto. No shock overlay, even if NPR is huge.
+Phone / PWA layers (this API does not enforce them; the client chooses `plume_mode`):
+
+- **Thesis** (PWA default): always send `"collisionless"` explicitly. Hard override: `p_tank_Pa` is ignored for the field (no barrel, no disk). `p_e_Pa`, `p_tank_Pa`, and `npr` may still be echoed as diagnostics if a tank pressure was sent.
+- **Advanced**: send `"auto"` or `"sudden_freeze"`, plus optional `p_tank_Pa`. Auto uses the Kn trigger and may apply the shock overlay. `sudden_freeze` forces the continuum core and overlay (subject to the freeze/Kn veto).
+
+Mode chips:
+
+- `"collisionless"`: Khasawneh–Cai 2-D free-molecular jet from the exit slit. Hard override of Auto and of `p_tank`. No shock overlay, even if NPR is huge or `Kn_exit` is low.
 - `"sudden_freeze"`: planar isentropic source flow (collisions on) until Boyd `Kn_GLL = λ/R` reaches 0.05, then translational T freezes and density continues as 1/R. Outside the Prandtl–Meyer vacuum cone the collisionless jet is used. Chip overrides Auto. Continuum core plus shock overlay if `p_tank_Pa` allows.
-- `"auto"` (default): `Kn_exit >= 0.05` → collisionless (unchanged Khasawneh–Cai). `Kn_exit < 0.05` → continuum core (sudden-freeze source flow) **plus** the shock overlay below if `p_tank` allows. Response also has `plume.plume_mode_requested`.
+- `"auto"` (API default when the field is omitted): `Kn_exit >= 0.05` → collisionless (unchanged Khasawneh–Cai). `Kn_exit < 0.05` → continuum core (sudden-freeze source flow) **plus** the shock overlay below if `p_tank` allows. Response also has `plume.plume_mode_requested`.
 
 Response already includes `plume.mode`, `plume.kn_gll_exit`, `plume.r_freeze_m`, `plume.kn_crit`.
 
