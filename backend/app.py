@@ -37,7 +37,7 @@ DIST = ROOT / "frontend" / "dist"
 app = FastAPI(
     title="IRS collisionless plume",
     description="NASA CEA rocket stations + Khasawneh–Cai 2-D free-molecular jet.",
-    version="1.4.0",
+    version="1.5.0",
 )
 # API key first (inner), CORS last so it wraps 401s for grok.me / localhost.
 app.add_middleware(ApiKeyMiddleware)
@@ -70,6 +70,7 @@ class SolveRequest(BaseModel):
     ny: int = Field(65, ge=GRID_MIN, le=GRID_MAX)
     mode: str = Field("enthalpy", description="enthalpy | generator | power | point")
     plume_mode: str = Field("auto", description="auto | collisionless | sudden_freeze")
+    p_tank_Pa: float = Field(10.0, gt=0.05, lt=2e5, description="Ambient / tank pressure for the shock overlay")
     # legacy
     gas: Optional[str] = None
     he_mole_frac: float = Field(0.0, ge=0.0, le=0.99)
@@ -263,6 +264,7 @@ def solve(req: SolveRequest) -> dict[str, Any]:
             int(req.nx),
             int(req.ny),
             pmode,
+            float(req.p_tank_Pa),
         )
         payload["mode"] = mode
         if mode == "generator":
