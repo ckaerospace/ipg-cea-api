@@ -26,6 +26,22 @@ from .plume import CollisionlessPlume
 KN_CRIT = 0.05  # Boyd Kn_GLL / Bird P-order freeze
 
 
+def resolve_plume_mode(plume_mode: str, kn_exit: float) -> tuple[str, str]:
+    """Kn_exit is the only auto trigger. collisionless / sudden_freeze chips override Auto."""
+    requested = (plume_mode or "auto").strip().lower()
+    if requested in ("freeze", "collisional"):
+        requested = "sudden_freeze"
+    if requested in ("auto", ""):
+        chosen = "sudden_freeze" if kn_exit < KN_CRIT else "collisionless"
+        requested = "auto"
+    elif requested in ("sudden_freeze", "collisionless"):
+        chosen = requested
+    else:
+        chosen = "sudden_freeze" if kn_exit < KN_CRIT else "collisionless"
+        requested = "auto"
+    return requested, chosen
+
+
 def kn_gll_exit(n0: float, H: float, d_hs: float) -> float:
     """λ/H at the nozzle lip. Continuum if this is well below KN_CRIT."""
     n0 = max(float(n0), 1.0)

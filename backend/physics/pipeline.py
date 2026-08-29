@@ -12,7 +12,8 @@ from .cea_rocket import run_rocket
 from .constants import E_CHARGE, IPG6S, K_B, M_O, M_U, NozzleGeometry
 from .derived import probe_quantities, probe_to_dict
 from .plume import CollisionlessPlume, marching_squares
-from .sudden_freeze import KN_CRIT, kn_gll_exit, mix_d_hs, sudden_freeze_field
+from .shocks import attach_shock_overlay
+from .sudden_freeze import KN_CRIT, kn_gll_exit, mix_d_hs, resolve_plume_mode, sudden_freeze_field
 
 DENSITY_LEVELS = [0.8, 0.5, 0.3, 0.2, 0.1, 0.05, 0.01]
 SPEED_LEVELS = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.3, 1.35]
@@ -35,6 +36,7 @@ def solve_operating_point(
     ions: bool = True,
     include_contours: bool = True,
     plume_mode: str = "auto",
+    p_tank_Pa: float = 10.0,
 ) -> dict[str, Any]:
     geom = geometry or IPG6S
     cea_res = run_rocket(
@@ -47,7 +49,36 @@ def solve_operating_point(
         geometry=geom,
         ions=ions,
     )
-    ex = cea_res.exit
+    return assemble_plume(
+        cea_res.exit,
+        cea_payload=cea_res.as_dict(),
+        hinj_MJ_kg=float(cea_res.hinj_MJ_kg),
+        href_MJ_kg=float(cea_res.mixture.get("h_ref_MJ_kg", 0.0)),
+        xmax_m=xmax_m,
+        ymax_m=ymax_m,
+        nx=nx,
+        ny=ny,
+        include_contours=include_contours,
+        plume_mode=plume_mode,
+        p_tank_Pa=p_tank_Pa,
+    )
+
+
+def assemble_plume(
+    ex: Mapping[str, Any],
+    *,
+    cea_payload: Mapping[str, Any] | None = None,
+    hinj_MJ_kg: float = 23.0,
+    href_MJ_kg: float = 0.0,
+    xmax_m: float = 2.0,
+    ymax_m: float = 1.0,
+    nx: int = 97,
+    ny: int = 81,
+    include_contours: bool = True,
+    plume_mode: str = "auto",
+    p_tank_Pa: float = 10.0,
+) -> dict[str, Any]:
+    """Build the plume payload from a CEA exit state (live or fixture)."""
     plume = CollisionlessPlume.from_exit(
         T0=ex["T0"],
         R_specific=ex["R"],
@@ -59,15 +90,7 @@ def solve_operating_point(
     y = np.linspace(-ymax_m, ymax_m, ny)
     d_hs = mix_d_hs(ex.get("mole_fractions") or {})
     kn_exit = kn_gll_exit(ex["n0"], ex["H"], d_hs)
-    requested = (plume_mode or "auto").strip().lower()
-    if requested in ("freeze", "collisional"):
-        requested = "sudden_freeze"
-    if requested in ("auto", ""):
-        chosen = "sudden_freeze" if kn_exit < KN_CRIT else "collisionless"
-    elif requested in ("sudden_freeze", "collisionless"):
-        chosen = requested
-    else:
-        chosen = "sudden_freeze" if kn_exit < KN_CRIT else "collisionless"
+    requested, chosen = resolve_plume_mode(plume_mode, kn_exit)
 
     field = plume.grid(x, y)
     freeze_meta = {
@@ -101,11 +124,28 @@ def solve_operating_point(
             "d_hs": field.get("d_hs") or d_hs,
         })
 
+    field, shock_meta = attach_shock_overlay(
+        field, x, y,
+        p_e_Pa=float(ex.get("p_Pa") or 0.0),
+        p_tank_Pa=float(p_tank_Pa),
+        H=float(ex["H"]),
+        T0=float(ex["T0"]),
+        n0=float(ex["n0"]),
+        U0=float(ex["U0"]),
+        R_specific=float(ex["R"]),
+        gamma=float(ex.get("gamma") or 1.4),
+        Mach_e=float(ex.get("Mach") or 1.2),
+        d_hs=d_hs,
+        kn_exit=float(freeze_meta["kn_gll_exit"]),
+        r_freeze_m=freeze_meta.get("r_freeze_m"),
+        mode=chosen,
+    )
+
     # Frozen total enthalpy on the collisionless grid:
     # static h ≈ href + (h_exit − href) * T/T0, then add ½V².
-    href_J = float(cea_res.mixture.get("h_ref_MJ_kg", 0.0)) * 1e6
+    href_J = float(href_MJ_kg) * 1e6
     h_exit_J = float(ex.get("h_kJ_kg") or 0.0) * 1e3
-    hinj_J = float(cea_res.hinj_MJ_kg) * 1e6
+    hinj_J = float(hinj_MJ_kg) * 1e6
     t_ratio = np.asarray(field["t_ratio"], dtype=np.float64)
     speed = np.asarray(field["speed"], dtype=np.float64)
     h_static = href_J + (h_exit_J - href_J) * t_ratio
@@ -143,7 +183,7 @@ def solve_operating_point(
         return np.asarray(a, dtype=np.float32).ravel(order="C").tolist()
 
     return {
-        "cea": cea_res.as_dict(),
+        "cea": dict(cea_payload) if cea_payload is not None else {"exit": dict(ex)},
         "plume": {
             "S0": plume.S0,
             "T0": plume.T0,
@@ -159,6 +199,17 @@ def solve_operating_point(
             "theta_jet_deg": freeze_meta["theta_jet_deg"],
             "kn_crit": freeze_meta["kn_crit"],
             "d_hs": freeze_meta["d_hs"],
+            "p_tank_Pa": shock_meta["p_tank_Pa"],
+            "p_e_Pa": shock_meta["p_e_Pa"],
+            "npr": shock_meta["npr"],
+            "regime": shock_meta["regime"],
+            "x_mach_disk_m": shock_meta["x_mach_disk_m"],
+            "r_triple_m": shock_meta["r_triple_m"],
+            "shock_applied": shock_meta["shock_applied"],
+            "shock_reason": shock_meta["shock_reason"],
+            "barrel_xy": shock_meta["barrel_xy"],
+            "disk_y0": shock_meta["disk_y0"],
+            "disk_y1": shock_meta["disk_y1"],
             "xmax_m": xmax_m,
             "ymax_m": ymax_m,
             "nx": nx,
@@ -181,6 +232,7 @@ def solve_operating_point(
             "CEA is equilibrium chemistry and can under-predict dissociation/ions relative to the RF plasma.",
             "The default plume is a 2-D planar collisionless jet applied to a round nozzle: H = D_E/2.",
             "plume_mode=sudden_freeze uses isentropic source flow until Kn_GLL=0.05 (Boyd/Bird), then freezes T.",
+            "Continuum plumes add an engineering shock overlay from p_e / p_tank (Crist/Addy disk, θ–β–M lip wave). Not Euler/NS/DSMC.",
             "Atomic-oxygen kinetic energy in the tunnel is typically 2–3.8 eV, below Venus aerobraking (8.3 eV).",
             "Catalytic heat flux is a fully-catalytic (γ=1) upper-bound estimate from O recombination when O is present.",
         ],
@@ -281,6 +333,7 @@ def solve_cached(
     nx: int,
     ny: int,
     plume_mode: str = "auto",
+    p_tank_Pa: float = 10.0,
 ) -> dict[str, Any]:
     mixture = json.loads(mix_key)
     geom = NozzleGeometry.from_mm(nozzle_name, d_c_mm, d_t_mm, d_e_mm)
@@ -296,4 +349,5 @@ def solve_cached(
         ny=ny,
         geometry=geom,
         plume_mode=plume_mode,
+        p_tank_Pa=p_tank_Pa,
     )

@@ -46,7 +46,11 @@ X-API-Key: <only if the host set API_KEY>
 
 `nx` and `ny` are clamped to **17–80** (phone-safe grid). Sending 97×81 is accepted and capped at 80×80.
 
-Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s`, `hinj_MJ_kg`, `delta_h_MJ_kg`, `converged`) and `plume` (`H`, `S0`, `T0`, `U0`, `n0`, `n_ratio`, `u`, `v`, `t_ratio`, `h_tot_MJ_kg`, `h_tot_ratio` arrays, plus `contours`). There is no top-level `probe`; interpolate the plume grid client-side.
+Optional `p_tank_Pa` (default **10.0**, `gt=0.05`, `lt=2e5`) is the ambient pressure used only for the continuum shock overlay. Old clients that omit it keep working.
+
+Thesis PWA clients send `"plume_mode": "collisionless"` and do not rely on `p_tank_Pa` for the field. Advanced clients send `"auto"` or `"sudden_freeze"` and may send `p_tank_Pa`.
+
+Response top keys: `cea` (stations, frozen `exit`, geometry, mixture, `mdot_mg_s`, `hinj_MJ_kg`, `delta_h_MJ_kg`, `converged`) and `plume` (`H`, `S0`, `T0`, `U0`, `n0`, `n_ratio`, `u`, `v`, `t_ratio`, `h_tot_MJ_kg`, `h_tot_ratio` arrays, plus `contours`). There is no top-level `probe`; interpolate the plume grid client-side. CEA already reports `exit.p_Pa` (`p_e`); nozzle pressure ratio is `NPR = p_e / p_tank`.
 
 ### Input modes
 
@@ -234,19 +238,83 @@ PYTHONPATH=backend python3 -m uvicorn app:app --app-dir backend --host 0.0.0.0 -
 
 Set `API_KEY` in the Render dashboard if you want to require `X-API-Key` — do not commit secrets. Confirm CEA with `GET /api/health` → `cea_version` like `3.3.3`.
 
+## Tests
+
+From the repo root:
+
+```text
+pip install -r requirements-test.txt
+PYTHONPATH=backend python -m pytest tests -q
+```
+
+Most cases fixture a CEA exit state (no live NASA CEA). One smoke test runs `solve_operating_point` if `import cea` works. CI is `.github/workflows/test.yml`. Bug reports use `.github/ISSUE_TEMPLATE/bug.yml`.
+
 
 ### Plume mode
 
-`plume_mode` on `/api/solve` (default `"auto"`):
+`plume_mode` on `/api/solve` (default `"auto"` when omitted, so old clients do not break). **Knudsen number is the only Auto trigger.**
 
-- `"collisionless"`: Khasawneh–Cai 2-D free-molecular jet from the exit slit (original).
-- `"sudden_freeze"`: planar isentropic source flow (collisions on) until Boyd `Kn_GLL = λ/R` reaches 0.05, then translational T freezes and density continues as 1/R. Outside the Prandtl–Meyer vacuum cone the collisionless jet is used. Response `plume.mode`, `plume.kn_gll_exit`, `plume.r_freeze_m`.
+`Kn_exit = λ/H` at the lip. `KN_CRIT = 0.05` (Boyd `Kn_GLL` / Bird P-order).
 
-- `"auto"` (default): if `Kn_exit = λ/H` at the lip is below 0.05, use sudden-freeze; otherwise collisionless. Response also has `plume.plume_mode_requested`.
+Phone / PWA layers (this API does not enforce them; the client chooses `plume_mode`):
+
+- **Thesis** (PWA default): always send `"collisionless"` explicitly. Hard override: `p_tank_Pa` is ignored for the field (no barrel, no disk). `p_e_Pa`, `p_tank_Pa`, and `npr` may still be echoed as diagnostics if a tank pressure was sent.
+- **Advanced**: send `"auto"` or `"sudden_freeze"`, plus optional `p_tank_Pa`. Auto uses the Kn trigger and may apply the shock overlay. `sudden_freeze` forces the continuum core and overlay (subject to the freeze/Kn veto).
+
+Mode chips:
+
+- `"collisionless"`: Khasawneh–Cai 2-D free-molecular jet from the exit slit. Hard override of Auto and of `p_tank`. No shock overlay, even if NPR is huge or `Kn_exit` is low.
+- `"sudden_freeze"`: planar isentropic source flow (collisions on) until Boyd `Kn_GLL = λ/R` reaches 0.05, then translational T freezes and density continues as 1/R. Outside the Prandtl–Meyer vacuum cone the collisionless jet is used. Chip overrides Auto. Continuum core plus shock overlay if `p_tank_Pa` allows.
+- `"auto"` (API default when the field is omitted): `Kn_exit >= 0.05` → collisionless (unchanged Khasawneh–Cai). `Kn_exit < 0.05` → continuum core (sudden-freeze source flow) **plus** the shock overlay below if `p_tank` allows. Response also has `plume.plume_mode_requested`.
+
+Response already includes `plume.mode`, `plume.kn_gll_exit`, `plume.r_freeze_m`, `plume.kn_crit`.
+
+### Shock overlay (continuum only)
+
+Engineering model, not Euler / Navier–Stokes / DSMC. Applied only on the continuum path.
+
+`NPR = p_e / p_tank` with `p_e = cea.exit.p_Pa`.
+
+- **Underexpanded** (`p_e > p_tank`): Mach-disk station (axisymmetric) `x_m / D_e = 0.67 * sqrt(p_e / p_tank)` (Crist 1966 / Addy 1981 / Ashkenas–Sherman sonic-orifice family; `D_e = 2H`). Barrel is a smooth curve from the lip `(x=0, y=H)` to the triple point `(x_m, ~0.3–0.4 x_m)`, then a normal disk across `|y| < r_tp`. Rankine–Hugoniot jump on the disk (normal shock at the pre-disk Mach from the isentropic core). Downstream: subsonic, higher `n` and `T`, `U` drops.
+- **Overexpanded** (`p_tank > p_e`): lip oblique shock from θ–β–M (pressure ratio → `β`). Core is deflected inward. If the wave would Mach-reflect, a small disk is placed; otherwise regular reflection.
+- **Matched** (`|log NPR| < ~0.05`): no shock, sudden-freeze only.
+- **Freeze veto:** if `r_freeze` is closer than `x_m`, or Kn at the would-be disk is `>= 0.05`, the shock is **not** applied (`shock_applied=false`, `shock_reason=freeze_before_disk`). Vacuum-like ambient pressures then look like today's sudden-freeze.
+
+Optional-safe extras on `plume`:
+
+| Field | Meaning |
+|---|---|
+| `p_tank_Pa` | Ambient pressure used for NPR |
+| `p_e_Pa` | CEA exit pressure |
+| `npr` | `p_e / p_tank` |
+| `regime` | `underexpanded` \| `overexpanded` \| `matched` \| `vacuum` |
+| `x_mach_disk_m` | Disk axial station, or `null` if no disk |
+| `r_triple_m` | Triple-point radius, or `null` |
+| `shock_applied` | `true` if the overlay mutated the field |
+| `shock_reason` | Why it was applied or skipped (`freeze_before_disk`, `collisionless`, `matched`, …) |
+| `barrel_xy` | `[[x, y], …]` lip → triple, upper half `y >= 0` (empty if no barrel) |
+| `disk_y0`, `disk_y1` | Disk span at `x_mach_disk_m`, or `null` |
+| `r_freeze_m`, `kn_gll_exit`, `kn_crit` | Already present |
 
 Grid extras on `plume`:
 
 - `mach`: local Mach \(U / \sqrt{\gamma R T}\) with \(T = (T/T_0) T_0\).
 - `e_kin_eV`: directed particle kinetic energy \( \tfrac12 \bar m U^2 \) in eV (mixture-mean mass).
 - `e_O_eV`: same for atomic oxygen, \( \tfrac12 m_O U^2 \). Probe also returns `e_th_eV` = \( \tfrac32 kT \).
+
+## References
+
+- NASA CEA (Gordon & McBride / CEA2)
+- Bird, G. A. (1970). Breakdown of translational and rotational equilibrium in gaseous expansions. *AIAA J.* 8(11), 1998–2003. doi:10.2514/3.6037
+- Bird, G. A. (1994). *Molecular Gas Dynamics and the Direct Simulation of Gas Flows*. Oxford.
+- Boyd, I. D., Chen, G., & Candler, G. V. (1995). Predicting failure of the continuum fluid equations in transitional hypersonic flows. *Phys. Fluids* 7, 210–219. doi:10.1063/1.868720
+- Cai, C., & Boyd, I. D. (2007). Theoretical and numerical study of free molecular-flow problems. *J. Spacecraft Rockets* 44(3), 619–624. doi:10.2514/1.25893
+- Khasawneh, K. R., Liu, H., & Cai, C. (2010). Highly rarefied two-dimensional jet impingement on a flat plate. *Phys. Fluids* 22. doi:10.1063/1.3490409
+- Crist, S., Sherman, P. M., & Glass, D. R. (1966). Study of the highly underexpanded sonic jet. *AIAA J.* 4(1), 68–71. doi:10.2514/3.3386
+- Addy, A. L. (1981). Effects of axisymmetric sonic nozzle geometry on Mach disk characteristics. *AIAA J.* 19(1), 121–122. doi:10.2514/3.7751
+- Ashkenas, H., & Sherman, F. S. (1966). The structure and utilization of supersonic free jets in low density wind tunnels. *Rarefied Gas Dynamics*.
+- Albini, F. A. (1965). Approximate computation of underexpanded jet structure. *AIAA J.* 3(8), 1535–1537. doi:10.2514/3.3194
+- Boynton, F. P. (1967). Highly underexpanded jet structure — exact and approximate calculations. *AIAA J.* 5(9), 1703–1704. doi:10.2514/3.4283
+- Dettleff, G. (1991). Plume flow and plume impingement in space technology. *Prog. Aerosp. Sci.* 28, 1–71. doi:10.1016/0376-0421(91)90008-R
+- Rankine–Hugoniot relations; Prandtl–Meyer turning (standard)
 

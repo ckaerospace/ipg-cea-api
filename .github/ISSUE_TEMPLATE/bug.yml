@@ -1,0 +1,87 @@
+name: Bug report
+description: Report a plume / solve mismatch on the CEA API
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for unexpected `/api/solve` or plume-field behaviour.
+        Thesis = collisionless kernel. Advanced = Auto / sudden_freeze / ambient shock overlay.
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      description: Which client layer were you using?
+      options:
+        - Thesis
+        - Advanced
+        - Raw API / other client
+    validations:
+      required: true
+  - type: dropdown
+    id: plume_mode
+    attributes:
+      label: plume_mode
+      options:
+        - collisionless
+        - auto
+        - sudden_freeze
+        - omitted (API default auto)
+    validations:
+      required: true
+  - type: input
+    id: p_tank_Pa
+    attributes:
+      label: p_tank_Pa
+      description: Ambient pressure sent (Pa). Leave blank if omitted (API default 10).
+      placeholder: "10"
+  - type: input
+    id: facility_gas
+    attributes:
+      label: Facility / gas
+      description: Nozzle name and mixture (e.g. IPG6-S, O2).
+      placeholder: "IPG6-S / O2"
+  - type: input
+    id: mdot
+    attributes:
+      label: ṁ (mg/s)
+      description: Mass flow if known (`mdot_mg_s` or requested_mdot_mg_s).
+      placeholder: "13"
+  - type: input
+    id: pinj
+    attributes:
+      label: pinj_Pa
+      placeholder: "100"
+    validations:
+      required: true
+  - type: input
+    id: hinj
+    attributes:
+      label: hinj_MJ_kg
+      placeholder: "23"
+  - type: input
+    id: kn_exit
+    attributes:
+      label: Kn_exit
+      description: `plume.kn_gll_exit` if known.
+      placeholder: "0.04"
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What should have happened (mode, shock_applied, disk station, field…)?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happened instead? Paste `plume.mode`, `shock_applied`, `shock_reason`, `regime` if useful.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Extra
+      description: Request JSON (redact secrets), response snippets, or grid size.
