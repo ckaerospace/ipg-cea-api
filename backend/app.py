@@ -7,7 +7,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.responses import Response
 
 from physics.cea_rocket import (
@@ -28,7 +28,7 @@ from physics.constants import (
     NozzleGeometry,
 )
 from physics.mixture import UnknownSpecies, parse_mixture, validate_species
-from physics.pipeline import solve_cached
+from physics.pipeline import attach_sample_disk, solve_cached
 from public_access import CORS_ORIGIN_REGEX, GRID_MAX, GRID_MIN, ApiKeyMiddleware, api_key
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,12 +84,22 @@ class SolveRequest(BaseModel):
     he_mole_frac: float = Field(0.0, ge=0.0, le=0.99)
     power_W: Optional[float] = None
     mdot_mg_s: Optional[float] = None
+    # Optional calorimeter disk on the axis. Omit probe_x_m → plume.probe is null.
+    probe_x_m: Optional[float] = Field(None, gt=0.0, description="Disk station, m; omit for no probe")
+    probe_r_mm: float = Field(20.0, ge=2.0, le=80.0, description="Disk radius, mm")
+    probe_Tw_K: float = Field(300.0, ge=200.0, le=2000.0, description="Wall temperature, K")
 
     @field_validator("nx", "ny", mode="before")
     @classmethod
     def _cap_grid(cls, v):
         n = int(v)
         return max(GRID_MIN, min(n, GRID_MAX))
+
+    @model_validator(mode="after")
+    def _probe_inside_box(self):
+        if self.probe_x_m is not None and self.probe_x_m >= self.xmax_m:
+            raise ValueError("probe_x_m must be greater than 0 and less than xmax_m")
+        return self
 
 
 class MixPreview(BaseModel):
@@ -273,6 +283,12 @@ def solve(req: SolveRequest) -> dict[str, Any]:
             int(req.ny),
             pmode,
             float(req.p_tank_Pa),
+        )
+        payload = attach_sample_disk(
+            payload,
+            req.probe_x_m,
+            probe_r_mm=float(req.probe_r_mm),
+            probe_Tw_K=float(req.probe_Tw_K),
         )
         payload["mode"] = mode
         if mode == "generator":
