@@ -238,6 +238,17 @@ PYTHONPATH=backend python3 -m uvicorn app:app --app-dir backend --host 0.0.0.0 -
 
 Set `API_KEY` in the Render dashboard if you want to require `X-API-Key` — do not commit secrets. Confirm CEA with `GET /api/health` → `cea_version` like `3.3.3`.
 
+## Tests
+
+From the repo root:
+
+```text
+pip install -r requirements-test.txt
+PYTHONPATH=backend python -m pytest tests -q
+```
+
+Most cases fixture a CEA exit state (no live NASA CEA). One smoke test runs `solve_operating_point` if `import cea` works. CI is `.github/workflows/test.yml`. Bug reports use `.github/ISSUE_TEMPLATE/bug.yml`.
+
 
 ### Plume mode
 

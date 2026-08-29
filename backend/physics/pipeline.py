@@ -49,7 +49,36 @@ def solve_operating_point(
         geometry=geom,
         ions=ions,
     )
-    ex = cea_res.exit
+    return assemble_plume(
+        cea_res.exit,
+        cea_payload=cea_res.as_dict(),
+        hinj_MJ_kg=float(cea_res.hinj_MJ_kg),
+        href_MJ_kg=float(cea_res.mixture.get("h_ref_MJ_kg", 0.0)),
+        xmax_m=xmax_m,
+        ymax_m=ymax_m,
+        nx=nx,
+        ny=ny,
+        include_contours=include_contours,
+        plume_mode=plume_mode,
+        p_tank_Pa=p_tank_Pa,
+    )
+
+
+def assemble_plume(
+    ex: Mapping[str, Any],
+    *,
+    cea_payload: Mapping[str, Any] | None = None,
+    hinj_MJ_kg: float = 23.0,
+    href_MJ_kg: float = 0.0,
+    xmax_m: float = 2.0,
+    ymax_m: float = 1.0,
+    nx: int = 97,
+    ny: int = 81,
+    include_contours: bool = True,
+    plume_mode: str = "auto",
+    p_tank_Pa: float = 10.0,
+) -> dict[str, Any]:
+    """Build the plume payload from a CEA exit state (live or fixture)."""
     plume = CollisionlessPlume.from_exit(
         T0=ex["T0"],
         R_specific=ex["R"],
@@ -114,9 +143,9 @@ def solve_operating_point(
 
     # Frozen total enthalpy on the collisionless grid:
     # static h ≈ href + (h_exit − href) * T/T0, then add ½V².
-    href_J = float(cea_res.mixture.get("h_ref_MJ_kg", 0.0)) * 1e6
+    href_J = float(href_MJ_kg) * 1e6
     h_exit_J = float(ex.get("h_kJ_kg") or 0.0) * 1e3
-    hinj_J = float(cea_res.hinj_MJ_kg) * 1e6
+    hinj_J = float(hinj_MJ_kg) * 1e6
     t_ratio = np.asarray(field["t_ratio"], dtype=np.float64)
     speed = np.asarray(field["speed"], dtype=np.float64)
     h_static = href_J + (h_exit_J - href_J) * t_ratio
@@ -154,7 +183,7 @@ def solve_operating_point(
         return np.asarray(a, dtype=np.float32).ravel(order="C").tolist()
 
     return {
-        "cea": cea_res.as_dict(),
+        "cea": dict(cea_payload) if cea_payload is not None else {"exit": dict(ex)},
         "plume": {
             "S0": plume.S0,
             "T0": plume.T0,
