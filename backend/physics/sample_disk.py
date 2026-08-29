@@ -30,10 +30,13 @@ from math import erf
 
 import numpy as np
 
-from .constants import K_B, N_A
+from .constants import K_B
 from .sudden_freeze import KN_CRIT, mix_d_hs
 
 SQRT_PI = np.sqrt(np.pi)
+ATM_PA = 101325.0
+
+
 def _finite(x: float, default: float = 0.0) -> float:
     v = float(x)
     return v if np.isfinite(v) else default
