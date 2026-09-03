@@ -37,7 +37,7 @@ DIST = ROOT / "frontend" / "dist"
 app = FastAPI(
     title="IRS collisionless plume",
     description="NASA CEA rocket stations + Khasawneh–Cai 2-D free-molecular jet.",
-    version="1.5.0",
+    version="1.6.0",
 )
 # API key first (inner), CORS last so it wraps 401s for grok.me / localhost.
 app.add_middleware(ApiKeyMiddleware)

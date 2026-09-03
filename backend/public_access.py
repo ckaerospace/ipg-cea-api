@@ -24,7 +24,7 @@ CORS_ALLOW_HEADERS = "Authorization, Content-Type, X-API-Key"
 CORS_ALLOW_METHODS = "GET, POST, OPTIONS"
 
 GRID_MIN = 17
-GRID_MAX = 80
+GRID_MAX = 97
 
 
 def origin_allowed(origin: str | None) -> bool:
