@@ -44,7 +44,7 @@ X-API-Key: <only if the host set API_KEY>
 }
 ```
 
-`nx` and `ny` are clamped to **17–80** (phone-safe grid). Sending 97×81 is accepted and capped at 80×80.
+`nx` and `ny` are clamped to **17–97** (phone-safe grid). The response uses the requested `nx`/`ny` after that clamp — it does not always return 97. Sending 129×129 is accepted and capped at 97×97.
 
 Optional `p_tank_Pa` (default **10.0**, `gt=0.05`, `lt=2e5`) is the ambient pressure used only for the continuum shock overlay. Old clients that omit it keep working.
 

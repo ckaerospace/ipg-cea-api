@@ -114,6 +114,29 @@ def test_overexpanded_when_p_tank_gt_p_e(dense_exit):
     assert payload["plume"]["npr"] == pytest.approx(10.0 / 50.0)
 
 
+def test_grid_max_is_97_and_cap_preserves_97():
+    from fastapi.testclient import TestClient
+
+    from app import SolveRequest, app
+    from public_access import GRID_MAX, GRID_MIN
+
+    assert GRID_MIN == 17
+    assert GRID_MAX == 97
+    body = SolveRequest.model_validate(
+        {"pinj_Pa": 100, "hinj_MJ_kg": 23, "mixture": {"O2": 1.0}, "nx": 97, "ny": 97}
+    )
+    assert body.nx == 97
+    assert body.ny == 97
+    over = SolveRequest.model_validate(
+        {"pinj_Pa": 100, "hinj_MJ_kg": 23, "mixture": {"O2": 1.0}, "nx": 200, "ny": 98}
+    )
+    assert over.nx == 97
+    assert over.ny == 97
+    health = TestClient(app).get("/api/health")
+    assert health.status_code == 200
+    assert health.json()["grid_max"] == 97
+
+
 def test_omit_p_tank_defaults_ten_no_422():
     from pydantic import ValidationError
 
